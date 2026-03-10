@@ -3,11 +3,9 @@ import * as Papa from "papaparse";
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line, CartesianGrid, Legend } from "recharts";
 import _ from "lodash";
 import * as pdfjsLib from "pdfjs-dist";
+import pdfjsWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-  "pdfjs-dist/build/pdf.worker.mjs",
-  import.meta.url
-).toString();
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
 // ─── CATEGORY ENGINE ───
 const DEFAULT_CATEGORIES = {
@@ -228,21 +226,57 @@ const DATE_PATTERNS = [
   { re: /((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2})/i, name: "Mon DD" },
 ];
 
+// Short MM/DD pattern (no year) — used separately so we can infer the year
+const SHORT_DATE_RE = /^(\d{1,2})[\/\-](\d{1,2})(?![\/\-\d])/;
+
+function inferYearFromLines(lines) {
+  const yearCandidates = [];
+  for (const line of lines) {
+    const m4 = line.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+    if (m4) { yearCandidates.push(parseInt(m4[3])); continue; }
+    const m2 = line.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2})(?!\d)/);
+    if (m2) { yearCandidates.push(2000 + parseInt(m2[3])); continue; }
+    const mw = line.match(/(20\d{2})/);
+    if (mw) yearCandidates.push(parseInt(mw[1]));
+  }
+  if (yearCandidates.length > 0) {
+    const counts = {};
+    yearCandidates.forEach(y => { counts[y] = (counts[y] || 0) + 1; });
+    return parseInt(Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0]);
+  }
+  return new Date().getFullYear();
+}
+
 // Amount patterns — very generous matching
 const AMT_PATTERNS = [
   /[-+]?\$[\d,]+\.\d{2}/,                   // $1,234.56 or -$50.00
   /\([\$]?[\d,]+\.\d{2}\)/,                 // (1,234.56) or ($50.00)
+  /[-+]\s+[\d,]+\.\d{2}/,                   // - 8.00 or + 8.00 (space after sign)
   /[-+]?[\d,]+\.\d{2}[-+]?/,               // 1234.56 or 1234.56-
   /[-+]?\$[\d,]+(?!\.\d)/,                  // $1,234 (no cents)
 ];
 
-function findDate(text) {
+function findDate(text, inferredYear = null) {
   for (const { re } of DATE_PATTERNS) {
     const m = text.match(re);
     if (m) {
       const d = parseDate(m[1]);
       if (d && d.getFullYear() > 1990 && d.getFullYear() < 2040) {
         return { date: d, str: m[0], index: m.index, endIndex: m.index + m[0].length };
+      }
+    }
+  }
+  // Try short MM/DD format if we have an inferred year
+  if (inferredYear) {
+    const m = text.match(SHORT_DATE_RE);
+    if (m) {
+      const month = parseInt(m[1]) - 1;
+      const day = parseInt(m[2]);
+      if (month >= 0 && month <= 11 && day >= 1 && day <= 31) {
+        const d = new Date(inferredYear, month, day);
+        if (!isNaN(d.getTime())) {
+          return { date: d, str: m[0], index: m.index, endIndex: m.index + m[0].length };
+        }
       }
     }
   }
@@ -330,12 +364,12 @@ function extractDescFromLine(line, dateEnd, amtStart) {
 }
 
 // Strategy 1: Single-line extraction (date + desc + amount on same line)
-function strategySingleLine(lines) {
+function strategySingleLine(lines, inferredYear = null) {
   const txns = [];
   for (const line of lines) {
     if (isJunkLine(line) || isHeaderLine(line)) continue;
     
-    const dateResult = findDate(line);
+    const dateResult = findDate(line, inferredYear);
     if (!dateResult) continue;
     
     const amounts = findAmounts(line);
@@ -363,7 +397,7 @@ function strategySingleLine(lines) {
 }
 
 // Strategy 2: Multi-line extraction (date on one line, desc/amount may follow)
-function strategyMultiLine(lines) {
+function strategyMultiLine(lines, inferredYear = null) {
   const txns = [];
   let i = 0;
   
@@ -371,7 +405,7 @@ function strategyMultiLine(lines) {
     const line = lines[i];
     if (isJunkLine(line) || isHeaderLine(line)) { i++; continue; }
     
-    const dateResult = findDate(line);
+    const dateResult = findDate(line, inferredYear);
     if (!dateResult) { i++; continue; }
     
     // Collect this line and up to 2 following lines as a transaction block
@@ -381,8 +415,7 @@ function strategyMultiLine(lines) {
     while (j < lines.length && j <= i + 3) {
       const nextLine = lines[j];
       if (isJunkLine(nextLine) || isHeaderLine(nextLine)) break;
-      // If next line has a date, it's a new transaction
-      if (findDate(nextLine)) break;
+      if (findDate(nextLine, inferredYear)) break;
       blockLines.push(nextLine);
       block += "  " + nextLine;
       j++;
@@ -476,19 +509,21 @@ Return ONLY the JSON array.`
 }
 
 async function parsePDF(file, onProgress = () => {}) {
-  // Try text-based extraction first (faster, no API needed)
   let pages;
+  let extractionError = null;
   try {
     onProgress("Reading PDF...");
     pages = await extractPdfContent(file);
-    onProgress("Analyzing statement layout...");
+    onProgress(`Extracted ${pages.length} page(s), analyzing layout...`);
   } catch (e) {
-    console.warn("PDF.js extraction failed:", e);
+    console.error("PDF.js extraction failed:", e);
+    extractionError = e;
     pages = [];
   }
 
   // Build lines with multiple Y-tolerances
   let bestTxns = [];
+  let inferredYear = null;
   
   for (const tolerance of [2, 4, 6, 8]) {
     let allLines = [];
@@ -498,13 +533,15 @@ async function parsePDF(file, onProgress = () => {}) {
     }
     
     if (allLines.length === 0) continue;
+
+    if (!inferredYear) inferredYear = inferYearFromLines(allLines);
     
     // Try single-line strategy
-    let txns = strategySingleLine(allLines);
+    let txns = strategySingleLine(allLines, inferredYear);
     if (txns.length > bestTxns.length) bestTxns = txns;
     
     // Try multi-line strategy
-    txns = strategyMultiLine(allLines);
+    txns = strategyMultiLine(allLines, inferredYear);
     if (txns.length > bestTxns.length) bestTxns = txns;
   }
 
@@ -578,10 +615,10 @@ function UploadScreen({ onData }) {
         error: () => { setError("Failed to parse CSV"); setLoading(false); }
       });
     } else if (ext === "pdf") {
-      setLoadingMsg("Extracting text from PDF...");
+      setLoadingMsg("Reading PDF...");
       parsePDF(file, (msg) => setLoadingMsg(msg)).then(transactions => {
         if (transactions.length === 0) {
-          setError("No transactions found in PDF. The format may not be supported — try CSV export from your bank.");
+          setError("No transactions found in PDF. This can happen with scanned/image-based PDFs. Try exporting a CSV from your bank's website instead.");
           setLoading(false);
           setLoadingMsg("");
           return;
@@ -590,7 +627,8 @@ function UploadScreen({ onData }) {
         setLoading(false);
         setLoadingMsg("");
       }).catch(e => {
-        setError(e.message || "Failed to parse PDF. Try CSV export from your bank.");
+        console.error("PDF parse error:", e);
+        setError("Failed to read PDF: " + (e.message || "Unknown error") + ". Try a CSV export from your bank instead.");
         setLoading(false);
         setLoadingMsg("");
       });
