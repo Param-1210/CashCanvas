@@ -12,20 +12,28 @@ Drop a CSV or PDF bank statement and CashCanvas will:
 - **Rank your top merchants** — see exactly where you spend the most
 - **Help you save** — set a savings goal with a deadline, pick categories to cut back on, and get a personalized weekly budget
 
-## How to Use
+## Live Demo
 
-1. Go to [cashcanvas.vercel.app](https://cashcanvas.vercel.app) (or run it locally — see below)
-2. Drag and drop your bank statement (CSV or PDF)
-3. Explore the **Overview** tab for spending charts and trends
-4. Check the **Transactions** tab to review and recategorize individual items
-5. Visit **Categories** to add custom keywords so future uploads are even more accurate
-6. Head to **Savings** to set a goal, choose where to cut, and generate your plan
+**[cash-canvas-sigma.vercel.app](https://cash-canvas-sigma.vercel.app)**
 
 No account needed. No sign-up. Just upload and go.
 
-## Try It Without a Statement
+## How to Use
 
-Click **"Try with sample data"** on the upload screen to explore the full dashboard with six months of realistic demo transactions.
+1. Open the app and drag and drop your bank statement (CSV or PDF)
+2. Explore the **Overview** tab for spending charts and trends
+3. Check the **Transactions** tab to review and recategorize individual items
+4. Visit **Categories** to add custom keywords so future uploads are even more accurate
+5. Head to **Savings** to set a goal, choose where to cut, and generate your plan
+
+Don't have a statement handy? Click **"Try with sample data"** to explore the full dashboard with six months of realistic demo transactions.
+
+## Supported File Formats
+
+| Format | Details |
+|--------|---------|
+| CSV / TSV | Auto-detects date, description, and amount columns from most banks |
+| PDF | Extracts transactions from text-based bank statement PDFs (tested with Chase, supports most major banks) |
 
 ## Privacy
 
@@ -41,13 +49,6 @@ npm run dev
 ```
 
 Open [http://localhost:5173](http://localhost:5173) in your browser.
-
-## Supported File Formats
-
-| Format | Details |
-|--------|---------|
-| CSV / TSV | Auto-detects date, description, and amount columns from most banks |
-| PDF | Extracts transactions from text-based bank statement PDFs |
 
 ## Built With
 
