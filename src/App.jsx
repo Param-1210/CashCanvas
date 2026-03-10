@@ -2,6 +2,12 @@ import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import * as Papa from "papaparse";
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line, CartesianGrid, Legend } from "recharts";
 import _ from "lodash";
+import * as pdfjsLib from "pdfjs-dist";
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+  "pdfjs-dist/build/pdf.worker.mjs",
+  import.meta.url
+).toString();
 
 // ─── CATEGORY ENGINE ───
 const DEFAULT_CATEGORIES = {
@@ -148,28 +154,9 @@ function SectionTitle({ children, sub }) {
 }
 
 // ─── PDF PARSING ENGINE ───
-let pdfjsLoaded = null;
-
-function loadPdfJs() {
-  if (pdfjsLoaded) return pdfjsLoaded;
-  pdfjsLoaded = new Promise((resolve, reject) => {
-    if (window.pdfjsLib) { resolve(window.pdfjsLib); return; }
-    const script = document.createElement("script");
-    script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
-    script.onload = () => {
-      const lib = window.pdfjsLib;
-      lib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-      resolve(lib);
-    };
-    script.onerror = () => reject(new Error("Failed to load PDF library"));
-    document.head.appendChild(script);
-  });
-  return pdfjsLoaded;
-}
 
 // Extract structured items from PDF with spatial info
 async function extractPdfContent(file) {
-  const pdfjsLib = await loadPdfJs();
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
 
@@ -492,7 +479,7 @@ async function parsePDF(file, onProgress = () => {}) {
   // Try text-based extraction first (faster, no API needed)
   let pages;
   try {
-    onProgress("Loading PDF library...");
+    onProgress("Reading PDF...");
     pages = await extractPdfContent(file);
     onProgress("Analyzing statement layout...");
   } catch (e) {
